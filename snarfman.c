@@ -10,7 +10,6 @@
 
 enum {
 	SNARFMAX = 100*1024,
-	NSNARFS = 9,
 };
 
 typedef struct Snarf Snarf;
@@ -25,10 +24,11 @@ struct Snarf {
 /* knobs */
 int maxlines = 10;
 int sleeptime = 500;
+int maxsnarfs = 9;
 
 int nsnarfs = 0;
 int snarfidx = 0;
-Snarf *snarfs[NSNARFS];
+Snarf **snarfs;
 char *snarfloc = "/dev/snarf";
 int mainstacksize = 128*1024;
 
@@ -128,6 +128,7 @@ putsnarf(Snarf *snf)
 Snarf*
 getsnarf(void)
 {
+	void *p;
 	int fd, n;
 	Snarf *snf;
 	Tm *t;
@@ -158,6 +159,15 @@ getsnarf(void)
 
 	close(fd);
 
+	/* shrink to fit */
+	p = realloc(snf->addr, n);
+	if(p == nil){
+		free(snf->addr);
+		free(snf);
+		return nil;
+	}
+
+	snf->addr = p;
 	snf->len = n;
 
 	countnl(snf);
@@ -207,16 +217,16 @@ upsnarf(void)
 		return;
 	}
 
-	if(nsnarfs == NSNARFS){
+	if(nsnarfs == maxsnarfs){
 		old = snarfs[snarfidx];
 		freesnarf(old);
 	}
 
-	if(nsnarfs < NSNARFS)
+	if(nsnarfs < maxsnarfs)
 		nsnarfs++;
 
 	snarfs[snarfidx] = snf;
-	snarfidx = (snarfidx + 1) % NSNARFS;
+	snarfidx = (snarfidx + 1) % maxsnarfs;
 }
 
 static void
@@ -320,7 +330,7 @@ timerthread(void *v)
 void
 usage(void)
 {
-	fprint(2, "usage: %s [-n maxlines] [-d ms]\n", argv0);
+	fprint(2, "usage: %s [-s /dev/snarf] [-n maxlines] [-d ms] [-m maxsnarfs]\n", argv0);
 	threadexitsall("usage");
 }
 
@@ -338,15 +348,27 @@ threadmain(int argc, char *argv[])
 	struct nk_context *ctx = &sctx;
 
 	ARGBEGIN{
+	case 's':
+		snarfloc = strdup(EARGF(usage()));
+		break;
 	case 'n':
 		maxlines = atoi(EARGF(usage()));
 		break;
 	case 'd':
 		sleeptime = atoi(EARGF(usage()));
 		break;
+	case 'm':
+		maxsnarfs = atoi(EARGF(usage()));
+		if(maxsnarfs <= 1)
+			usage();
+		break;
 	default:
 		usage();
 	}ARGEND
+
+	snarfs = calloc(maxsnarfs, sizeof(Snarf*));
+	if(snarfs == nil)
+		sysfatal("calloc: %r");
 
 	if(initdraw(nil, nil, "snarfman") < 0)
 		sysfatal("initdraw: %r");
